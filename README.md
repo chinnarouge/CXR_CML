@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 # Expert-level detection of pathologies from unannotated chest X-ray images via self-supervised learning
 
 <details>
@@ -155,3 +156,6 @@ Tiu, E., Talius, E., Patel, P. et al. Expert-level detection of pathologies from
 
 ## License
 The source code for the site is licensed under the MIT license, which you can find in the `LICENSE` file. Also see `NOTICE.md` for attributions to third-party sources. 
+=======
+# CXR_CML
+>>>>>>> 5c27171a6290fd248ea6582658ee9d1f2ecde3c3
