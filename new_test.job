@@ -1,0 +1,12 @@
+#!/bin/bash -l 
+#SBATCH --time=1:00:00  
+#SBATCH --job-name=test_vindr
+#SBATCH --export=NONE 
+#SBATCH --nodes=1
+
+unset SLURM_EXPORT_ENV
+
+module add python
+conda activate lol
+
+python3 /home/woody/iwi5/iwi5207h/metric_learning/CheXzero/zero_shot_test.py
