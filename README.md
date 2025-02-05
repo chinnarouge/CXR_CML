@@ -49,9 +49,9 @@ python eval.py --model_path <path_to_trained_model> --cxr_filepath <path_to_hdf5
 ```
 
 ### Inference
-To perform inference on new chest X-ray images, use the `zero_shot.py` script:
+To perform inference on new chest X-ray images, use the `zero_shot_test.py` script:
 ```bash
-python zero_shot.py --model_path <path_to_trained_model> --cxr_filepath <path_to_hdf5> --cxr_labels <list_of_labels>
+python zero_shot_test.py --model_path <path_to_trained_model> --cxr_filepath <path_to_hdf5> --cxr_labels <list_of_labels>
 ```
 
 ## Contributing
