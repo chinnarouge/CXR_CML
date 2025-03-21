@@ -34,6 +34,8 @@ from sklearn.mixture import GaussianMixture
 import transformers
 from transformers import AutoModel
 from sklearn.mixture import BayesianGaussianMixture
+from scipy.special import gammaln, digamma
+from scipy.optimize import minimize
 
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -337,7 +339,148 @@ class VisualTransformer(nn.Module):
 
         return x
 
+class StudentTMixture:
+    def __init__(self, n_components, n_features, max_iter=100, tol=1e-3, nu_init=100.0):
+        self.n_components = n_components
+        self.n_features = n_features
+        self.max_iter = max_iter
+        self.tol = tol
+        self.nu = np.full(n_components, nu_init)  # degrees of freedom
+        
+        # Initialize other parameters using regular GMM
+        self.gmm = GaussianMixture(
+            n_components=n_components,
+            covariance_type='full',
+            max_iter=100,
+            n_init=1
+        )
+        
+    def _e_step(self, X, means, covs, weights):
+        n_samples = X.shape[0]
+        resp = np.zeros((n_samples, self.n_components))
+        
+        for k in range(self.n_components):
+            delta = X - means[k]
+            maha_dist = np.sum(np.dot(delta, np.linalg.inv(covs[k])) * delta, axis=1)
+            
+            # Calculate responsibilities using Student's t-distribution
+            resp[:, k] = weights[k] * (1 + maha_dist/self.nu[k])**(-(self.nu[k] + self.n_features)/2)
+            
+        resp /= resp.sum(axis=1, keepdims=True)
+        return resp
+        
+    def fit(self, X):
+        # Initialize using GMM
+        self.gmm.fit(X)
+        means = self.gmm.means_
+        covs = self.gmm.covariances_
+        weights = self.gmm.weights_
+        
+        n_samples = X.shape[0]
+        
+        for iteration in range(self.max_iter):
+            # E-step
+            resp = self._e_step(X, means, covs, weights)
+            
+            # M-step
+            nk = resp.sum(axis=0)
+            
+            # Update means
+            for k in range(self.n_components):
+                means[k] = np.sum(resp[:, k:k+1] * X, axis=0) / nk[k]
+            
+            # Update covariances
+            for k in range(self.n_components):
+                diff = X - means[k]
+                covs[k] = np.dot(resp[:, k] * diff.T, diff) / nk[k]
+            
+            # Update weights
+            weights = nk / n_samples
+            
+            # Update degrees of freedom (nu) using optimization
+            for k in range(self.n_components):
+                def obj_fun(nu):
+                    return -(gammaln((nu + self.n_features)/2) - 
+                            gammaln(nu/2) - 
+                            self.n_features/2 * np.log(nu) +
+                            nu/2 * np.mean(np.log(1 + maha_dist/nu)))
+                
+                delta = X - means[k]
+                maha_dist = np.sum(np.dot(delta, np.linalg.inv(covs[k])) * delta, axis=1)
+                
+                result = minimize(obj_fun, x0=self.nu[k], bounds=[(2.0, 1000.0)])
+                self.nu[k] = result.x[0]
+        
+        self.means_ = means
+        self.covariances_ = covs
+        self.weights_ = weights
+        return self
+    
+    def predict_proba(self, X):
+        return self._e_step(X, self.means_, self.covariances_, self.weights_)
 
+class StudentTGMM:
+    def __init__(self, n_components, n_features, nu=2.0):
+        self.n_components = n_components
+        self.n_features = n_features
+        self.nu = nu  # Fixed degrees of freedom
+        
+        # Initialize GMM for getting initial parameters
+        self.gmm = GaussianMixture(
+            n_components=n_components,
+            covariance_type='full',
+            max_iter=100,
+            n_init=3
+        )
+        
+    def fit_predict(self, X):
+        # Fit GMM to get initial clustering
+        self.gmm.fit(X)
+    
+        # Get GMM parameters
+        means = self.gmm.means_
+        covs = self.gmm.covariances_
+        weights = self.gmm.weights_
+    
+        # Precompute inverses of covariance matrices (if covariances are not changing between iterations)
+        cov_inv = [np.linalg.inv(cov) for cov in covs]  # Invert each covariance matrix
+    
+        # Calculate Student's t probabilities
+        n_samples = X.shape[0]
+        probs = np.zeros((n_samples, self.n_components))
+    
+        for k in range(self.n_components):
+            diff = X - means[k]
+            maha_dist = np.sum(diff @ cov_inv[k] * diff, axis=1)
+        
+            # Add small constant for numerical stability
+            eps = 1e-10
+        
+            # Ensure covariance matrix is well-conditioned
+            covs[k] = covs[k] + np.eye(covs[k].shape[0]) * eps
+        
+            # Calculate determinant with numerical stability
+            sign, logdet = np.linalg.slogdet(covs[k])
+            if sign <= 0:
+                logdet = np.log(eps)
+        
+            # Calculate log probabilities using Student's t-distribution
+            const = (gammaln((self.nu + self.n_features) / 2) - 
+                 gammaln(self.nu / 2) - 
+                 (self.n_features / 2) * np.log(self.nu * np.pi) - 
+                 0.5 * logdet)
+        
+            log_probs = const - ((self.nu + self.n_features) / 2) * np.log1p(maha_dist / self.nu)
+            probs[:, k] = weights[k] * np.exp(np.clip(log_probs, -700, 700))
+    
+        # Normalize probabilities with numerical stability
+        row_sums = probs.sum(axis=1, keepdims=True)
+        row_sums = np.maximum(row_sums, eps)
+        probs = probs / row_sums
+        return probs
+
+
+    
 class CLIP(nn.Module):
     def __init__(
         self,
@@ -551,7 +694,105 @@ class CLIP(nn.Module):
 
         return total_loss
 
-    def generate_soft_labels(self, image_features, num_clusters=75, beta=0.05):
+    '''def generate_soft_labels(self, image_features, num_clusters=75, beta=0.05):
+        with torch.no_grad():
+            # Convert features to numpy for clustering
+            features_np = image_features.cpu().numpy()
+            
+            # Handle small sample sizes
+            n_samples = features_np.shape[0]
+            if n_samples == 1:
+                return torch.ones(1, num_clusters).to(image_features.device) / num_clusters
+            
+            # Adaptive number of components based on sample size
+            if n_samples < 10:
+                n_components = 2
+            elif n_samples < 50:
+                n_components = min(5, n_samples // 3)
+            else:
+                n_components = min(num_clusters, n_samples // 4)
+            
+            # Use Student's t Mixture Model
+            stm = StudentTMixture(
+                n_components=n_components,
+                n_features=features_np.shape[1],
+                max_iter=300,
+                nu_init=5.0  # Initial degrees of freedom (lower values = heavier tails)
+            )
+            
+            # Normalize features before clustering
+            features_normalized = features_np / (np.linalg.norm(features_np, axis=1, keepdims=True) + 1e-8)
+            
+            # Fit model and get probabilities
+            stm.fit(features_normalized)
+            cluster_probs = stm.predict_proba(features_normalized)
+            
+            # Convert to tensor and move to correct device
+            soft_labels = torch.from_numpy(cluster_probs).float().to(image_features.device)
+            
+            # Temperature scaling with adaptive beta
+            adaptive_beta = beta * (1 + np.log(n_samples)/100)
+            soft_labels = F.softmax(soft_labels / adaptive_beta, dim=1)
+            
+            # Balance clusters using effective counts
+            effective_counts = soft_labels.sum(dim=0) + 1e-8
+            weights = 1.0 / torch.log1p(effective_counts)
+            weights = weights / weights.sum()
+            
+            # Apply balanced weights
+            weighted_soft_labels = soft_labels * weights.unsqueeze(0)
+            
+            # Final normalization
+            return F.normalize(weighted_soft_labels, p=1, dim=1)'''
+    def generate_soft_labels(self, image_features, num_clusters=40, beta=0.05):
+        with torch.no_grad():  
+            features_np = image_features.detach().cpu().numpy()
+        
+            # Handle single sample case
+            n_samples = features_np.shape[0]
+            if n_samples == 1:
+                return torch.ones(1, num_clusters).to(image_features.device) / num_clusters
+            
+            # Adaptive number of components
+            if n_samples < 10:
+                n_components = 2
+            elif n_samples < 50:
+                n_components = min(5, n_samples // 3)
+            else:
+                n_components = min(num_clusters, n_samples // 4)
+        
+            # Robust normalization with handling of invalid values
+            norms = np.linalg.norm(features_np, axis=1, keepdims=True)
+            norms = np.maximum(norms, 1e-8)  # Avoid division by zero
+            features_normalized = np.clip(features_np / norms, -1e6, 1e6)  # Clip extreme values
+            
+            # Replace any remaining invalid values with zeros
+            features_normalized = np.nan_to_num(features_normalized, nan=0.0, posinf=0.0, neginf=0.0)
+        
+            # Create and fit Student's t mixture model
+            stgmm = StudentTGMM(
+                n_components=n_components,
+                n_features=features_np.shape[1],
+                nu=8.0 # Fixed degrees of freedom
+            )
+        
+            # Get cluster probabilities
+            cluster_probs = stgmm.fit_predict(features_normalized)
+        
+            # Convert to tensor and apply temperature scaling
+            soft_labels = torch.from_numpy(cluster_probs).float().to(image_features.device)
+            soft_labels = F.softmax(soft_labels / beta, dim=1)
+        
+            # Balance clusters
+            effective_counts = soft_labels.sum(dim=0) + 1e-8
+            weights = 1.0 / torch.log1p(effective_counts)
+            weights = weights / weights.sum()
+        
+            # Final weighted normalization
+            weighted_soft_labels = soft_labels * weights.unsqueeze(0)
+            return F.normalize(weighted_soft_labels, p=1, dim=1)
+        
+    '''def generate_soft_labels(self, image_features, num_clusters=75, beta=0.05):
 
         with torch.no_grad():
             # Convert features to numpy for clustering
@@ -606,61 +847,7 @@ class CLIP(nn.Module):
             weighted_soft_labels = soft_labels * weights.unsqueeze(0)
             
             # Final normalization
-            return F.normalize(weighted_soft_labels, p=1, dim=1)
-        '''with torch.no_grad():
-            # Convert features to numpy for clustering
-            features_np = image_features.cpu().numpy()
-
-            
-
-            # Handle cases with very few samples
-            n_samples = features_np.shape[0]
-            
-            # If we have only 1 sample, return uniform distribution
-            if n_samples == 1:
-                return torch.ones(1, num_clusters).to(image_features.device) / num_clusters
-                
-            # For very small batches (2-9 samples)
-            if n_samples < 10:
-                n_components = 2  # minimum number of components
-            else:
-                n_components = min(num_clusters, n_samples // 2)
-            
-            gmm = GaussianMixture(
-                n_components=n_components,
-                covariance_type="full",
-                max_iter=150,
-                n_init=3,
-                random_state=42,
-                reg_covar=1e-3,
-            )
-
-            # Fit the model and get cluster probabilities
-            gmm.fit(features_np)
-
-            cluster_probs = gmm.predict_proba(features_np)
-
-            # Convert to tensor
-            soft_labels = (
-                torch.from_numpy(cluster_probs).float().to(image_features.device)
-            )
-
-            # Apply temperature scaling
-            soft_labels = F.softmax(soft_labels / beta, dim=1)
-
-            # Handle class imbalance with inverse frequency weighting
-            cluster_counts = soft_labels.sum(dim=0) + 1e-8
-            weights = 1.0 / torch.log1p(cluster_counts)
-            weights = weights / weights.sum()
-
-            # Apply weights to soft labels
-            weighted_soft_labels = soft_labels * weights.unsqueeze(0)
-
-            return F.normalize(weighted_soft_labels, p=1, dim=1)
-            #def generate_soft_labels(self, image_features, num_clusters=75, beta=0.05):
-                # Increased num_clusters from 60 to 75 for finer granularity
-                # Decreased beta from 0.1 to 0.05 for sharper cluster assignments
-                # Rest of the generate_soft_labels implementation stays the same...'''
+            return F.normalize(weighted_soft_labels, p=1, dim=1)'''
 
             
     def weighted_metric_loss(
@@ -668,7 +855,11 @@ class CLIP(nn.Module):
 
         # Generate soft labels from image features
         soft_labels = self.generate_soft_labels(image_features)
-
+        # Generate soft labels from text features
+        #text_soft_labels = self.generate_soft_labels(text_features)
+        
+        # Compute similarity matrix using soft labels from both image and text features
+        #soft_sim = soft_labels @ text_soft_labels.t()
         # Compute similarity matrix using soft labels
         soft_sim = soft_labels @ soft_labels.t()
         

@@ -28,22 +28,22 @@ wandb.login()
 
 def parse_args():
     parser = argparse.ArgumentParser()
-    parser.add_argument('--cxr_filepath', type=str, default='/home/vault/iwi5/iwi5207h/new/CheXzero/dataset/training_fold_1.h5', help="Directory to load chest x-ray image data from.")
-    parser.add_argument('--txt_filepath', type=str, default='/home/hpc/iwi5/iwi5207h/Thesis/dataset_csv/training/training_fold_1.csv', help="Directory to load radiology report impressions text from.")
-    parser.add_argument('--val_filepath', type=str, default='/home/vault/iwi5/iwi5207h/new/CheXzero/dataset/validation_fold_1.h5', help="Directory to load chest x-ray image data from.")
-    parser.add_argument('--label_filepath', type=str, default='/home/hpc/iwi5/iwi5207h/Thesis/dataset_csv/training/train_fold_1.csv', help="Directory to load labels from.")
-    parser.add_argument('--val_label_filepath', type=str, default='/home/hpc/iwi5/iwi5207h/Thesis/dataset_csv/validation/valid_fold_1.csv', help="Directory to load labels from.")
-    parser.add_argument('--val_txt_filepath', type=str, default='/home/hpc/iwi5/iwi5207h/Thesis/dataset_csv/validation/validation_text_fold_1.csv', help="Directory to load radiology report impressions text from.")
-    parser.add_argument('--cxr_true_labels_path', type=str, default='/home/hpc/iwi5/iwi5207h/Thesis/dataset_csv/validation/valid_fold_1.csv', help="Directory to load true labels from.")
+    parser.add_argument('--cxr_filepath', type=str, default='/home/vault/iwi5/iwi5207h/new/CheXzero/dataset/new_training.h5', help="Directory to load chest x-ray image data from.")
+    parser.add_argument('--txt_filepath', type=str, default='/home/hpc/iwi5/iwi5207h/Thesis/dataset_csv/new_training_data_without_lateral_present_report.csv', help="Directory to load radiology report impressions text from.")
+    parser.add_argument('--val_filepath', type=str, default='/home/vault/iwi5/iwi5207h/new/CheXzero/dataset/validation_fold_5.h5', help="Directory to load chest x-ray image data from.")
+    parser.add_argument('--label_filepath', type=str, default='/home/hpc/iwi5/iwi5207h/Thesis/dataset_csv/new_training_data_without_lateral.csv', help="Directory to load labels from.")
+    parser.add_argument('--val_label_filepath', type=str, default='/home/hpc/iwi5/iwi5207h/Thesis/dataset_csv/validation/valid_fold_5.csv', help="Directory to load labels from.")
+    parser.add_argument('--val_txt_filepath', type=str, default='/home/hpc/iwi5/iwi5207h/Thesis/dataset_csv/validation/validation_text_fold_5.csv', help="Directory to load radiology report impressions text from.")
+    parser.add_argument('--cxr_true_labels_path', type=str, default='/home/hpc/iwi5/iwi5207h/Thesis/dataset_csv/validation/valid_fold_5.csv', help="Directory to load true labels from.")
     parser.add_argument('--rare_filepath', type=str, default='/home/vault/iwi5/iwi5207h/new/CheXzero/dataset/bal_low_count_diseases_training.h5', help="Directory to load rare labels from.")
     parser.add_argument('--rare_txt_filepath', type=str, default='/home/hpc/iwi5/iwi5207h/Thesis/dataset_csv/bal_low_count_training_present_report.csv', help="Directory to load radiology report impressions text from.")
     parser.add_argument('--rare_label_filepath', type=str, default='/home/hpc/iwi5/iwi5207h/Thesis/dataset_csv/low_count_diseases_training_balanced.csv', help="Directory to load labels from.")
-    parser.add_argument('--batch_size', type=int, default=64)
+    parser.add_argument('--batch_size', type=int, default=32)
     parser.add_argument('--epochs', type=int, default=10)
     parser.add_argument('--lr', type=float, default=1e-6)
-    parser.add_argument('--save_interval', type=int, default=500)
-    parser.add_argument('--log_interval', type=int, default=500)
-    parser.add_argument('--val_interval', type=int, default=500)
+    parser.add_argument('--save_interval', type=int, default=1500)
+    parser.add_argument('--log_interval', type=int, default=1500)
+    parser.add_argument('--val_interval', type=int, default=1500)
     parser.add_argument('--best_model_dir', type=str, default="/home/vault/iwi5/iwi5207h/metric_learning_ds_new/checkpoints/best_model/", help="Directory to save the best model.")
     parser.add_argument('--save_dir', type=str, default="/home/vault/iwi5/iwi5207h/metric_learning_ds_new/checkpoints", help="Directory to save the trained model.")
     parser.add_argument('--seed', type=int, default=1234)
@@ -51,7 +51,7 @@ def parse_args():
     parser.add_argument('--momentum', type=float, default=0.9)
     parser.add_argument('--context_length', type=int, default=77)
     parser.add_argument('--random_init', action='store_true')
-    parser.add_argument('--model_name', type=str, default="fold_1_batch_64", help="Name of the model.")
+    parser.add_argument('--model_name', type=str, default="val_chex_5", help="Name of the model.")
     parser.add_argument('--plot_dir', type=str, default="/home/vault/iwi5/iwi5207h/metric_learning_ds_new/plots/", help="Directory to save the plots.")
     parser.add_argument('--scheduler', type=str, default='reduce_on_plateau', help="Type of learning rate scheduler to use.")
     parser.add_argument('--patience', type=int, default=3, help="Patience for ReduceLROnPlateau scheduler.")
@@ -60,7 +60,7 @@ def parse_args():
     return args
 
 def model_pipeline(config, verbose=0):
-    wandb.init(project="k_fold_batch", config=config, name="batch_64")
+    wandb.init(project="val_chex", config=config, name="val_chex_128")
     
     # Make the model, data, and optimization problem
     model, train_loader, rare_loader, eval_loader, val_loader, device, c_criterion, b_criterion, optimizer, scheduler = make(config)
@@ -84,7 +84,7 @@ def make(config):
     train_loader, device = load_data(config.cxr_filepath, config.txt_filepath, config.label_filepath, batch_size=config.batch_size, pretrained=pretrained, column="impression")
     eval_loader, _ = load_data(config.val_filepath, config.val_txt_filepath, config.val_label_filepath, batch_size=config.batch_size, pretrained=pretrained, column="impression", type='eval')
     val_loader, _ = load_data(config.val_filepath, config.val_txt_filepath, config.val_label_filepath, batch_size=config.batch_size, pretrained=pretrained, column="impression", type='test')
-    model = load_clip(model_path="/home/woody/iwi5/iwi5207h/Chexzero checkpoints/best_64_5e-05_original_22000_0.864.pt", pretrained=pretrained, context_length=config.context_length)
+    model = load_clip(model_path="/home/woody/iwi5/iwi5207h/Chexzero checkpoints/best_128_5e-05_original_22000_0.855.pt", pretrained=pretrained, context_length=config.context_length)
     model.to(device)
     model = model.to(torch.float32)
     rare_loader= train_loader
@@ -317,6 +317,7 @@ def validate(model, eval_loader, val_loader, device, c_criterion, b_criterion, c
                      'Round(ed) Atelectasis', 'Subcutaneous Emphysema', 'Support Devices', 
                      'Tortuous Aorta', 'Tuberculosis']
     
+    """cxr_labels =  ['Fibrosis', 'Pulmonary Hypertension', 'Pneumomediastinum', 'Infarction', 'Hydropneumothorax', 'Kyphosis', 'Pneumoperitoneum', 'Pleural Other', 'Azygos Lobe', 'Clavicle Fracture', 'Lobar Atelectasis', 'Rounded Atelectasis']"""
     model.to(device)
     model = model.to(torch.float32)
     with torch.no_grad():
@@ -441,7 +442,7 @@ def save(checkpoint, path):
     torch.save(checkpoint, path)
 
 def save_best_model(model, optimizer, epoch, val_auc, model_save_dir):
-    best_model_path = os.path.join(model_save_dir, "fold_1_batch_64.pt")
+    best_model_path = os.path.join(model_save_dir, "diag_1.pt")
     checkpoint = {
         'model': model.state_dict(),
         'optimizer': optimizer.state_dict(),

@@ -1,6 +1,6 @@
 #!/bin/bash -l 
-#SBATCH --time=24:00:00  
-#SBATCH --job-name=fold_1_batch_64
+#SBATCH --time=01:30:00  
+#SBATCH --job-name=val_chex_128
 #SBATCH --export=NONE 
 #SBATCH --nodes=1
 #SBATCH --gres=gpu:1
